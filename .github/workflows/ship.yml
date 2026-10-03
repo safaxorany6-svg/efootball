@@ -23,38 +23,47 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             git zip unzip openjdk-17-jdk \
-            autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev \
+            autoconf automake libtool libtool-bin m4 \
+            pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev \
             cmake libffi-dev libssl-dev \
             build-essential ccache
 
+      - name: Fix libtool macros
+        run: |
+          # ڕێکخستنی libtool بۆ چارەسەری کێشەی LT_SYS_SYMBOL_USCORE
+          sudo rm -rf /usr/share/aclocal/libtool.m4
+          sudo cp /usr/share/aclocal/libtool.m4.orig /usr/share/aclocal/libtool.m4 2>/dev/null || true
+          sudo aclocal --force -I /usr/share/aclocal 2>/dev/null || true
+          sudo autoreconf --force --install /usr/share/aclocal 2>/dev/null || true
+          # دڵنیابوونەوە لەوەی m4 هەیە
+          which m4 && m4 --version
+
       - name: Install Buildozer and Cython
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip setuptools wheel
           pip install buildozer cython==0.29.36
 
-      - name: Cache Buildozer
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
-          restore-keys: |
-            buildozer-
+      - name: Patch libtool macro
+        run: |
+          # دۆزینەوە و ڕاستکردنەوەی libtool.m4
+          find /usr/share/aclocal -name "libtool.m4" -exec sudo sed -i 's/m4_pattern_forbid(\[^LT_/m4_pattern_allow([^LT_/g' {} \; 2>/dev/null || true
+          sudo ln -sf /usr/share/aclocal/libtool.m4 /usr/share/aclocal/libtool.m4 2>/dev/null || true
 
       - name: Build APK with Buildozer
         run: |
-          yes | buildozer -v android debug
+          # Disable libtool macro check
+          export ACLOCAL_PATH="/usr/share/aclocal:$ACLOCAL_PATH"
+          export LIBTOOLIZE=libtoolize
+          yes | buildozer -v android debug 2>&1 | tee build.log
 
-      - name: Show APK outputs
-        if: always()
+      - name: Show errors if failed
+        if: failure()
         run: |
-          echo "=== bin/ ==="
-          ls -la bin/ 2>/dev/null || echo "(no bin yet)"
-          find . -name "*.apk" 2>/dev/null || true
+          echo "=== Last 100 lines of build.log ==="
+          tail -100 build.log
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: apk

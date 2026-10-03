@@ -5,14 +5,14 @@ package.name = efootball
 package.domain = org.shipit
 
 source.dir = .
-source.include_exts = py,png,jpg,jpeg,kv,atlas,ttf,txt,json,html,js,css,mp3,wav,ogg,gif,xml
+source.include_exts = py,png,jpg,jpeg,kv,atlas,ttf,txt,json
 
 source.exclude_exts = spec,pyc,pyo
 source.exclude_dirs = tests,bin,venv,.venv,.git,.github,dist,build,__pycache__
 
 version = 0.1.0
 
-requirements = python3,kivy==2.3.0,pillow
+requirements = python3,kivy==2.3.0
 
 orientation = landscape
 fullscreen = 1
@@ -22,7 +22,6 @@ android.minapi = 24
 android.ndk = 25b
 android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
-android.logcat_filters = *:S python:D
 
 [buildozer]
 log_level = 2
