@@ -1,30 +1,34 @@
 """
 ⚽ PRO SOCCER MOBILE 2026
-eFootball Style Mobile Game
-Kivy-based | Touch Controls | Smart Assist | Skill Moves
+eFootball Style Mobile Game | Production Ready
+Kivy 2.3.0 | Android Ready | 60 FPS
 """
 
 from kivy.app import App
 from kivy.uix.widget import Widget
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.label import Label
-from kivy.uix.button import Button
-from kivy.graphics import Color, Ellipse, Rectangle, Line, RoundedRectangle
+from kivy.graphics import Color, Ellipse, Rectangle, Line, RoundedRectangle, PushMatrix, PopMatrix
 from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.vector import Vector
-from kivy.properties import NumericProperty, BooleanProperty
-from kivy.metrics import dp
+from kivy.metrics import dp, sp
+from kivy.config import Config
+
 import math
 import random
+import gc
 
 # =========================================================
 # ==================== ڕێکخستن ============================
 # =========================================================
-# قەبارەی گونجاو بۆ مۆبایل (هەموو ئامێرەکان)
-Window.softinput_mode = 'below_target'
+Config.set('graphics', 'multisamples', '0')  # بۆ FPS باشتر
+Config.set('graphics', 'preserve_context', '1')  # preservation
+Config.set('kivy', 'exit_on_escape', '0')
 
-# ڕەنگەکان
+# =========================================================
+# ==================== ڕەنگەکان ===========================
+# =========================================================
 GRASS_DARK = (0.12, 0.47, 0.12, 1)
 GRASS_LIGHT = (0.16, 0.57, 0.16, 1)
 LINE_WHITE = (0.94, 0.94, 0.94, 1)
@@ -38,6 +42,33 @@ DARK_UI = (0.07, 0.09, 0.13, 0.85)
 SKIN = (0.94, 0.78, 0.63, 1)
 HAIR = (0.22, 0.14, 0.1, 1)
 ORANGE = (1, 0.55, 0, 1)
+PURPLE = (0.6, 0.2, 0.8, 1)
+
+
+# =========================================================
+# ==================== فەنکشنی یارمەتیدەر ==================
+# =========================================================
+def safe_normalize(v):
+    """normalized بەبێ division by zero"""
+    length = v.length()
+    if length > 0.0001:
+        return v / length
+    return Vector(0, 0)
+
+
+def vec_length_squared(v):
+    """length squared بەبێ Vector.length_squared"""
+    return v.x * v.x + v.y * v.y
+
+
+def lerp(a, b, t):
+    """Linear interpolation"""
+    return a + (b - a) * t
+
+
+def clamp(value, min_val, max_val):
+    """سنووردارکردنی نرخ"""
+    return max(min_val, min(max_val, value))
 
 
 # =========================================================
@@ -48,8 +79,8 @@ class Field:
         self.w = w
         self.h = h
         self.margin = dp(20)
-        self.field_w = w - self.margin * 2
-        self.field_h = h - self.margin * 2
+        self.field_w = max(1, w - self.margin * 2)
+        self.field_h = max(1, h - self.margin * 2)
         self.goal_height = self.field_h * 0.22
         self.goal_depth = dp(30)
         self.goal_y = (h - self.goal_height) / 2
@@ -57,66 +88,85 @@ class Field:
         self.right_x = w - self.margin
 
     def get_goal_center(self, side):
-        """ناوەندی گۆڵ: side='left' یان 'right'"""
-        x = self.left_x - self.goal_depth / 2 if side == "left" else self.right_x + self.goal_depth / 2
+        """ناوەندی گۆڵ"""
+        if side == "left":
+            x = self.left_x - self.goal_depth / 2
+        else:
+            x = self.right_x + self.goal_depth / 2
         return Vector(x, self.h / 2)
-
-    def is_inside(self, x, y):
-        return (self.left_x < x < self.right_x and
-                self.margin < y < self.h - self.margin)
 
 
 # =========================================================
 # ==================== تۆپ ================================
 # =========================================================
 class Ball:
+    MAX_TRAIL = 12
+
     def __init__(self, x, y):
         self.pos = Vector(x, y)
         self.vel = Vector(0, 0)
         self.radius = dp(11)
-        self.friction = 0.982
+        self.friction = 0.985
         self.bounce = 0.72
         self.trail = []
 
     def update(self, dt, field):
+        # بەرەنگاری لە خێرایی زۆر
+        dt = min(dt, 0.05)
+
         # جوڵە
-        self.pos += self.vel * dt * 60
+        self.pos.x += self.vel.x * dt * 60
+        self.pos.y += self.vel.y * dt * 60
 
-        # Friction
-        self.vel *= self.friction ** (dt * 60)
+        # Friction (نەرم)
+        friction_factor = self.friction ** (dt * 60)
+        self.vel.x *= friction_factor
+        self.vel.y *= friction_factor
 
-        # Bounce لە دیوارەکان (جگە لە گۆڵ)
+        # Bounce لە دیوارەکان
         if self.pos.x - self.radius < field.left_x:
             if not (field.goal_y < self.pos.y < field.goal_y + field.goal_height):
                 self.pos.x = field.left_x + self.radius
-                self.vel.x *= -self.bounce
+                self.vel.x = abs(self.vel.x) * self.bounce
         if self.pos.x + self.radius > field.right_x:
             if not (field.goal_y < self.pos.y < field.goal_y + field.goal_height):
                 self.pos.x = field.right_x - self.radius
-                self.vel.x *= -self.bounce
+                self.vel.x = -abs(self.vel.x) * self.bounce
         if self.pos.y - self.radius < field.margin:
             self.pos.y = field.margin + self.radius
-            self.vel.y *= -self.bounce
+            self.vel.y = abs(self.vel.y) * self.bounce
         if self.pos.y + self.radius > field.h - field.margin:
             self.pos.y = field.h - field.margin - self.radius
-            self.vel.y *= -self.bounce
+            self.vel.y = -abs(self.vel.y) * self.bounce
 
+        # وەستان
         if self.vel.length() < 0.05:
             self.vel = Vector(0, 0)
 
         # Trail
-        if self.vel.length() > 8:
-            self.trail.append([Vector(self.pos), 1.0])
+        speed = self.vel.length()
+        if speed > 8:
+            self.trail.append([Vector(self.pos.x, self.pos.y), 1.0])
+            if len(self.trail) > self.MAX_TRAIL:
+                self.trail.pop(0)
+
         for i in range(len(self.trail) - 1, -1, -1):
             self.trail[i][1] -= dt * 3
             if self.trail[i][1] <= 0:
                 self.trail.pop(i)
-        if len(self.trail) > 10:
-            self.trail.pop(0)
 
     def kick(self, direction, power):
-        if direction.length() > 0:
-            self.vel += direction.normalized() * power
+        """لێدان بە ئاراستە و هێز"""
+        norm_dir = safe_normalize(direction)
+        if norm_dir.length() > 0:
+            self.vel.x += norm_dir.x * power
+            self.vel.y += norm_dir.y * power
+
+    def reset(self, x, y):
+        """ڕیسێتی تۆپ"""
+        self.pos = Vector(x, y)
+        self.vel = Vector(0, 0)
+        self.trail.clear()
 
 
 # =========================================================
@@ -132,16 +182,20 @@ class Player:
         self.is_user = is_user
         self.radius = dp(15)
 
+        # خێرایی
         self.base_speed = dp(4.5)
         self.dash_speed = dp(7)
         self.finesse_speed = dp(3)
         self.accel = 0.5
         self.friction = 0.85
 
+        # شووت
         self.kick_power = 16
         self.shoot_power = 20
         self.cooldown = 0
+        self.cooldown_max = 0.35
 
+        # دۆخ
         self.facing = Vector(1, 0)
         self.anim_t = 0
         self.skill_timer = 0
@@ -150,35 +204,44 @@ class Player:
         self.dash_trail = []
 
     def move(self, move_vec, dash=False, finesse=False, dt=0.016):
+        dt = min(dt, 0.05)
+
+        # Cooldown
         if self.cooldown > 0:
             self.cooldown -= dt
+            if self.cooldown < 0:
+                self.cooldown = 0
 
+        # جوڵە
         if move_vec.length() > 0.05:
-            move_vec = move_vec.normalized()
+            move_vec = safe_normalize(move_vec)
 
             if dash and self.stamina > 20:
                 target_speed = self.dash_speed
-                self.stamina -= 30 * dt
-                self.dash_trail.append([Vector(self.pos), 1.0])
+                self.stamina = max(0, self.stamina - 30 * dt)
+                self.dash_trail.append([Vector(self.pos.x, self.pos.y), 1.0])
             elif finesse:
                 target_speed = self.finesse_speed
             else:
                 target_speed = self.base_speed
                 self.stamina = min(100, self.stamina + 15 * dt)
 
-            self.vel += move_vec * self.accel
-            self.facing = move_vec
+            self.vel.x += move_vec.x * self.accel
+            self.vel.y += move_vec.y * self.accel
+            self.facing = Vector(move_vec.x, move_vec.y)
 
             if self.vel.length() > target_speed:
-                self.vel = self.vel.normalized() * target_speed
+                self.vel = safe_normalize(self.vel) * target_speed
         else:
-            self.vel *= self.friction
+            self.vel.x *= self.friction
+            self.vel.y *= self.friction
             self.stamina = min(100, self.stamina + 25 * dt)
 
         if self.vel.length() < 0.05:
             self.vel = Vector(0, 0)
 
-        self.pos += self.vel * dt * 60
+        self.pos.x += self.vel.x * dt * 60
+        self.pos.y += self.vel.y * dt * 60
 
         # Trail decay
         for i in range(len(self.dash_trail) - 1, -1, -1):
@@ -186,42 +249,60 @@ class Player:
             if self.dash_trail[i][1] <= 0:
                 self.dash_trail.pop(i)
 
+        # Animation
         self.anim_t += self.vel.length() * dt * 8
         if self.skill_timer > 0:
             self.skill_timer -= dt
+            if self.skill_timer <= 0:
+                self.skill_type = None
 
     def clamp_to_field(self, field):
-        self.pos.x = max(field.left_x + self.radius,
-                         min(field.right_x - self.radius, self.pos.x))
-        self.pos.y = max(field.margin + self.radius,
-                         min(field.h - field.margin - self.radius, self.pos.y))
+        """سنووردارکردن بە یاریگا"""
+        min_x = field.left_x + self.radius
+        max_x = field.right_x - self.radius
+        min_y = field.margin + self.radius
+        max_y = field.h - field.margin - self.radius
+
+        self.pos.x = clamp(self.pos.x, min_x, max_x)
+        self.pos.y = clamp(self.pos.y, min_y, max_y)
 
     def collides_ball(self, ball):
-        return (Vector(ball.pos) - Vector(self.pos)).length() < self.radius + ball.radius + dp(5)
+        """پشکنینی بەرکەوتن لەگەڵ تۆپ"""
+        dx = ball.pos.x - self.pos.x
+        dy = ball.pos.y - self.pos.y
+        dist = math.sqrt(dx * dx + dy * dy)
+        return dist < self.radius + ball.radius + dp(5)
 
-    def shoot(self, ball, power_mult=1.0):
+    def shoot(self, ball, field, power_mult=1.0):
+        """شووت بە Smart Aim"""
         if self.cooldown > 0 or not self.collides_ball(ball):
             return False
 
-        # Smart aim بۆ گۆڵ
-        goal = field.get_goal_center("right" if self.team == "left" else "left")
-        direction = (goal - self.pos).normalized()
+        goal_side = "right" if self.team == "left" else "left"
+        goal = field.get_goal_center(goal_side)
+        direction = Vector(goal.x - self.pos.x, goal.y - self.pos.y)
 
         power = self.shoot_power * power_mult
         ball.kick(direction, power)
-        self.cooldown = 0.35
+        self.cooldown = self.cooldown_max
         return True
 
     def pass_ball(self, ball, target, high=False):
+        """پاس"""
         if self.cooldown > 0 or not self.collides_ball(ball):
             return False
 
         if target:
-            direction = (target.pos - self.pos).normalized()
-            distance = (target.pos - self.pos).length()
-            power = min(22, 8 + distance * 0.04) if not high else min(26, 12 + distance * 0.05)
+            dx = target.pos.x - self.pos.x
+            dy = target.pos.y - self.pos.y
+            direction = Vector(dx, dy)
+            distance = math.sqrt(dx * dx + dy * dy)
+            if high:
+                power = min(26, 12 + distance * 0.05)
+            else:
+                power = min(22, 8 + distance * 0.04)
         else:
-            direction = self.facing.normalized() if self.facing.length() > 0 else Vector(1, 0)
+            direction = Vector(self.facing.x, self.facing.y)
             power = 12 if not high else 16
 
         ball.kick(direction, power)
@@ -229,34 +310,65 @@ class Player:
         return True
 
     def skill_move(self, ball, skill_name, direction):
+        """Skill Moves وەک eFootball"""
         if self.skill_timer > 0 or not self.collides_ball(ball):
             return False
+
+        direction = safe_normalize(direction)
+        if direction.length() < 0.01:
+            direction = self.facing
 
         if skill_name == "marseille":
             self.skill_timer = 0.5
             self.skill_type = "marseille"
-            ball.vel += direction * 14
-            self.vel = direction * -4
+            ball.vel.x += direction.x * 14
+            ball.vel.y += direction.y * 14
+            self.vel.x = -direction.x * 4
+            self.vel.y = -direction.y * 4
+            return True
+
         elif skill_name == "rainbow":
             self.skill_timer = 0.6
             self.skill_type = "rainbow"
-            ball.vel += direction * 10
-            ball.vel.y -= 8
+            ball.vel.x += direction.x * 10
+            ball.vel.y += direction.y * 10 - 8
+            return True
+
         elif skill_name == "elastico":
             self.skill_timer = 0.4
             self.skill_type = "elastico"
             perp = Vector(-direction.y, direction.x)
-            ball.vel += perp * 10 + direction * 8
+            ball.vel.x += perp.x * 10 + direction.x * 8
+            ball.vel.y += perp.y * 10 + direction.y * 8
+            return True
+
         elif skill_name == "roulette":
             self.skill_timer = 0.55
             self.skill_type = "roulette"
-            ball.vel += direction * 12
+            ball.vel.x += direction.x * 12
+            ball.vel.y += direction.y * 12
+            return True
+
         elif skill_name == "stepover":
             self.skill_timer = 0.3
             self.skill_type = "stepover"
-            ball.vel += direction * 8
-            self.vel = direction * 2
-        return True
+            ball.vel.x += direction.x * 8
+            ball.vel.y += direction.y * 8
+            self.vel.x = direction.x * 2
+            self.vel.y = direction.y * 2
+            return True
+
+        return False
+
+    def reset(self, x, y):
+        """ڕیسێتی یاریزان"""
+        self.pos = Vector(x, y)
+        self.vel = Vector(0, 0)
+        self.stamina = 100.0
+        self.cooldown = 0
+        self.skill_timer = 0
+        self.skill_type = None
+        self.dash_trail.clear()
 
 
 # =========================================================
@@ -269,7 +381,10 @@ class SmartAssist:
         self.field = field
 
     def find_best_pass_target(self, player):
-        teammates = [p for p in self.players if p.team == player.team and p != player]
+        """دۆزینەوەی باشترین یاریزان بۆ پاس"""
+        teammates = [p for p in self.players
+                     if p.team == player.team and p is not player]
+
         if not teammates:
             return None
 
@@ -278,7 +393,10 @@ class SmartAssist:
         goal_x = self.field.right_x if player.team == "left" else self.field.left_x
 
         for t in teammates:
-            dist = (Vector(t.pos) - Vector(player.pos)).length()
+            dx = t.pos.x - player.pos.x
+            dy = t.pos.y - player.pos.y
+            dist = math.sqrt(dx * dx + dy * dy)
+
             if dist < dp(30):
                 continue
 
@@ -288,11 +406,14 @@ class SmartAssist:
             if (goal_x - t.pos.x) * (1 if player.team == "left" else -1) > 0:
                 score += 40
 
-            # ئەگەر یاریزانی بەرامبەر نزیکە، خراپتر
+            # نزیکی دوژمن خراپتر
             for opp in self.players:
                 if opp.team != player.team:
-                    if (Vector(opp.pos) - Vector(t.pos)).length() < dp(80):
+                    odx = opp.pos.x - t.pos.x
+                    ody = opp.pos.y - t.pos.y
+                    if math.sqrt(odx * odx + ody * ody) < dp(80):
                         score -= 30
+                        break
 
             if score > best_score:
                 best_score = score
@@ -301,14 +422,27 @@ class SmartAssist:
         return best_target
 
     def find_closest_to_ball(self, team):
+        """نزیکترین یاریزان بۆ تۆپ"""
         candidates = [p for p in self.players if p.team == team]
         if not candidates:
             return None
-        return min(candidates, key=lambda p: (Vector(p.pos) - Vector(self.ball.pos)).length())
+
+        closest = None
+        min_dist = float('inf')
+
+        for p in candidates:
+            dx = p.pos.x - self.ball.pos.x
+            dy = p.pos.y - self.ball.pos.y
+            dist = dx * dx + dy * dy
+            if dist < min_dist:
+                min_dist = dist
+                closest = p
+
+        return closest
 
 
 # =========================================================
-# ==================== AI =================================
+# ==================== AI Brain ===========================
 # =========================================================
 class AIBrain:
     def __init__(self, player, ball, players, field):
@@ -325,7 +459,9 @@ class AIBrain:
             return
         self.decision_timer = 0.15
 
-        dist = (Vector(self.ball.pos) - Vector(self.player.pos)).length()
+        dx = self.ball.pos.x - self.player.pos.x
+        dy = self.ball.pos.y - self.player.pos.y
+        dist = math.sqrt(dx * dx + dy * dy)
 
         if dist < dp(40):
             self.action = "attack"
@@ -338,20 +474,25 @@ class AIBrain:
             self.action = "chase"
 
     def get_move(self):
+        """ئاراستەی جوڵە بۆ AI"""
         if self.action == "chase":
-            d = Vector(self.ball.pos) - Vector(self.player.pos)
-            if d.length() > 0:
-                return d.normalized()
+            d = Vector(self.ball.pos.x - self.player.pos.x,
+                       self.ball.pos.y - self.player.pos.y)
+            if d.length() > 0.1:
+                return safe_normalize(d)
+
         elif self.action == "defend":
             home = Vector(self.field.right_x - dp(100), self.field.h / 2)
-            d = home - Vector(self.player.pos)
+            d = Vector(home.x - self.player.pos.x, home.y - self.player.pos.y)
             if d.length() > dp(10):
-                return d.normalized()
+                return safe_normalize(d)
+
         elif self.action == "attack":
             goal = Vector(self.field.left_x, self.field.h / 2)
-            d = goal - Vector(self.player.pos)
-            if d.length() > 0:
-                return d.normalized()
+            d = Vector(goal.x - self.player.pos.x, goal.y - self.player.pos.y)
+            if d.length() > 0.1:
+                return safe_normalize(d)
+
         return Vector(0, 0)
 
 
@@ -359,10 +500,14 @@ class AIBrain:
 # ==================== Virtual Joystick ===================
 # =========================================================
 class Joystick(Widget):
-    """Virtual Joystick بۆ مۆبایل (وەک eFootball)"""
+    """Virtual Joystick وەک eFootball Mobile"""
 
     def __init__(self, center_x, center_y, radius, side='left', **kwargs):
+        kwargs.setdefault('size_hint', (None, None))
+        kwargs.setdefault('size', (int(radius * 2), int(radius * 2)))
+        kwargs.setdefault('pos', (int(center_x - radius), int(center_y - radius)))
         super().__init__(**kwargs)
+
         self.center = Vector(center_x, center_y)
         self.radius = radius
         self.knob_pos = Vector(center_x, center_y)
@@ -370,38 +515,47 @@ class Joystick(Widget):
         self.touch_id = None
         self.side = side
         self.output = Vector(0, 0)
+        self.is_moving = False
 
     def on_touch_down(self, touch):
         if self.active:
             return False
-        # ناوچەی جوڵە
-        if self.side == 'left':
-            # بۆ جوڵە، هەموو شاشەی چەپ کار دەکات
-            if touch.x < Window.width / 2 and touch.y < Window.height * 0.6:
-                self.active = True
-                self.touch_id = touch.id
-                self.center = Vector(touch.x, touch.y)
-                self.knob_pos = Vector(touch.x, touch.y)
-                return True
+
+        # ناوچە گەورە بۆ جوڵە (وەک eFootball)
+        if touch.x < Window.width * 0.5 and touch.y < Window.height * 0.7:
+            self.active = True
+            self.touch_id = touch.id
+            self.center = Vector(touch.x, touch.y)
+            self.knob_pos = Vector(touch.x, touch.y)
+            self.is_moving = True
+            return True
         return False
 
     def on_touch_move(self, touch):
-        if self.active and touch.id == self.touch_id:
-            self.knob_pos = Vector(touch.x, touch.y)
-            delta = self.knob_pos - self.center
-            if delta.length() > self.radius:
-                delta = delta.normalized() * self.radius
-                self.knob_pos = self.center + delta
-            self.output = delta / self.radius
-            return True
-        return False
+        if not (self.active and touch.id == self.touch_id):
+            return False
+
+        self.knob_pos = Vector(touch.x, touch.y)
+        delta = Vector(self.knob_pos.x - self.center.x,
+                       self.knob_pos.y - self.center.y)
+
+        if delta.length() > self.radius:
+            delta = safe_normalize(delta) * self.radius
+            self.knob_pos = Vector(self.center.x + delta.x, self.center.y + delta.y)
+
+        # Deadzone
+        if self.radius > 0:
+            self.output = Vector(delta.x / self.radius, delta.y / self.radius)
+
+        return True
 
     def on_touch_up(self, touch):
         if self.active and touch.id == self.touch_id:
             self.active = False
             self.touch_id = None
-            self.knob_pos = Vector(self.center)
+            self.knob_pos = Vector(self.center.x, self.center.y)
             self.output = Vector(0, 0)
+            self.is_moving = False
             return True
         return False
 
@@ -410,13 +564,17 @@ class Joystick(Widget):
 
 
 # =========================================================
-# ==================== دوگمەکانی Action ===================
+# ==================== Action Button ======================
 # =========================================================
 class ActionButton(Widget):
-    """دوگمەیەکی گەرد بۆ Action (وەک eFootball Mobile)"""
+    """دوگمەی Action وەک eFootball Mobile"""
 
     def __init__(self, cx, cy, radius, label, color, callback=None, **kwargs):
+        kwargs.setdefault('size_hint', (None, None))
+        kwargs.setdefault('size', (int(radius * 2), int(radius * 2)))
+        kwargs.setdefault('pos', (int(cx - radius), int(cy - radius)))
         super().__init__(**kwargs)
+
         self.cx = cx
         self.cy = cy
         self.radius = radius
@@ -428,7 +586,9 @@ class ActionButton(Widget):
         self.hold_timer = 0
 
     def on_touch_down(self, touch):
-        if (Vector(touch.x, touch.y) - Vector(self.cx, self.cy)).length() < self.radius:
+        dx = touch.x - self.cx
+        dy = touch.y - self.cy
+        if math.sqrt(dx * dx + dy * dy) < self.radius * 1.3:  # ئاسانتر بۆ لێدان
             self.pressed = True
             self.touch_id = touch.id
             self.hold_timer = 0
@@ -452,136 +612,140 @@ class ActionButton(Widget):
 
 
 # =========================================================
-# ==================== یاری سەرەکی ========================
+# ==================== Soccer Game ========================
 # =========================================================
 class SoccerGame(Widget):
+    MATCH_TIME = 120.0
+
     def __init__(self, **kwargs):
+        kwargs.setdefault('size_hint', (1, 1))
+        kwargs.setdefault('pos_hint', {'x': 0, 'y': 0})
         super().__init__(**kwargs)
-        self.bind(size=self.on_resize)
+
+        self.bind(size=self._on_resize)
 
         # داتا
         self.field = None
         self.ball = None
         self.players = []
+        self.blue_team = []
+        self.red_team = []
         self.user = None
         self.ai_brains = {}
         self.smart = None
 
+        # دۆخ
         self.score_blue = 0
         self.score_red = 0
-        self.match_time = 120.0
+        self.match_time = self.MATCH_TIME
         self.game_over = False
         self.goal_banner = 0
         self.goal_team = None
         self.skill_popup_timer = 0
         self.skill_popup_name = None
 
-        # Joysticks و دوگمەکان
+        # UI
         self.move_joystick = None
         self.buttons = []
 
-        Clock.schedule_interval(self.update, 1 / 60.0)
+        self._initialized = False
 
-    def on_resize(self, *args):
-        """دروستکردنەوەی هەموو شتێک لەگەڵ قەبارەی نوێ"""
-        self.field = Field(self.width, self.height)
-        self.init_game()
+    def _on_resize(self, instance, size):
+        if size[0] < 10 or size[1] < 10:
+            return
+        self.field = Field(size[0], size[1])
+        if not self._initialized:
+            self._initialized = True
+            self.init_game()
+        else:
+            self.rebuild_layout()
 
     def init_game(self):
+        """دەستپێکردنی یاری"""
+        w, h = self.width, self.height
+
         # تۆپ
-        self.ball = Ball(self.width / 2, self.height / 2)
+        self.ball = Ball(w / 2, h / 2)
 
         # تیمەکان
-        blue, red = self.create_teams()
-        self.players = blue + red
-        self.user = blue[0]
+        self.blue_team, self.red_team = self.create_teams()
+        self.players = self.blue_team + self.red_team
+        self.user = self.blue_team[0]
 
         # AI
         self.ai_brains = {}
         for p in self.players:
-            if p != self.user:
+            if p is not self.user:
                 self.ai_brains[p] = AIBrain(p, self.ball, self.players, self.field)
 
         self.smart = SmartAssist(self.players, self.ball, self.field)
 
-        # Joystick
-        self.move_joystick = Joystick(
-            self.width * 0.2, self.height * 0.15, dp(70), side='left'
-        )
-        self.add_widget(self.move_joystick)
+        # UI
+        self.build_controls()
 
-        # دوگمەکانی Action
-        self.create_action_buttons()
-
+        # ڕیسێت
         self.score_blue = 0
         self.score_red = 0
-        self.match_time = 120.0
+        self.match_time = self.MATCH_TIME
         self.game_over = False
+        self.goal_banner = 0
+        self.goal_team = None
 
-    def create_action_buttons(self):
-        """دوگمەکانی Action وەک eFootball"""
+    def build_controls(self):
+        """دروستکردنی Joystick و دوگمەکان"""
         # پاککردنەوە
+        if self.move_joystick:
+            self.remove_widget(self.move_joystick)
         for b in self.buttons:
             self.remove_widget(b)
         self.buttons = []
 
-        r = dp(38)  # قەبارەی دوگمەکان
-        base_x = self.width - dp(90)
-        base_y = self.height * 0.15
+        # Joystick
+        jx = self.width * 0.18
+        jy = self.height * 0.22
+        jr = min(dp(75), self.width * 0.12)
+        self.move_joystick = Joystick(jx, jy, jr, side='left')
+        self.add_widget(self.move_joystick)
+
+        # دوگمەکان
+        r = min(dp(38), self.width * 0.06)
+        base_x = self.width - dp(80)
+        base_y = self.height * 0.22
 
         # شووت (B) - گەورەترین
-        shoot_btn = ActionButton(
-            base_x, base_y, r * 1.2, "⚽",
-            (0.84, 0.18, 0.18, 0.7),
-            callback=self.on_shoot
-        )
-        self.buttons.append(shoot_btn)
-        self.add_widget(shoot_btn)
+        self.add_action(base_x, base_y, r * 1.3, "⚽",
+                        (0.84, 0.18, 0.18, 0.85), self.on_shoot)
 
         # پاسی کورت (A)
-        pass_btn = ActionButton(
-            base_x - dp(100), base_y + dp(50), r, "➤",
-            (0.18, 0.37, 0.84, 0.7),
-            callback=self.on_pass_low
-        )
-        self.buttons.append(pass_btn)
-        self.add_widget(pass_btn)
+        self.add_action(base_x - dp(105), base_y + dp(45), r, "➤",
+                        (0.18, 0.37, 0.84, 0.85), self.on_pass_low)
 
         # پاسی بەرز (X)
-        high_btn = ActionButton(
-            base_x - dp(100), base_y - dp(50), r, "↑",
-            (0.24, 0.78, 0.39, 0.7),
-            callback=self.on_pass_high
-        )
-        self.buttons.append(high_btn)
-        self.add_widget(high_btn)
+        self.add_action(base_x - dp(105), base_y - dp(45), r, "↑",
+                        (0.24, 0.78, 0.39, 0.85), self.on_pass_high)
 
         # Through Ball (Y)
-        through_btn = ActionButton(
-            base_x - dp(180), base_y, r, "⇢",
-            (1, 0.84, 0, 0.7),
-            callback=self.on_through
-        )
-        self.buttons.append(through_btn)
-        self.add_widget(through_btn)
+        self.add_action(base_x - dp(195), base_y, r, "⇢",
+                        (1, 0.84, 0, 0.85), self.on_through)
 
-        # Dash (RT) - لە ژوورەوە
-        dash_btn = ActionButton(
-            base_x, base_y + dp(90), r * 0.9, "🏃",
-            (1, 0.55, 0, 0.7),
-            callback=self.on_dash
-        )
-        self.buttons.append(dash_btn)
-        self.add_widget(dash_btn)
+        # Dash (RT)
+        self.add_action(base_x, base_y + dp(95), r * 0.9, "🏃",
+                        (1, 0.55, 0, 0.85), self.on_dash)
 
-        # Skill (RT + Direction) - لە ژوورەوە
-        skill_btn = ActionButton(
-            base_x, base_y - dp(90), r * 0.9, "✦",
-            (0.6, 0.2, 0.8, 0.7),
-            callback=self.on_skill
-        )
-        self.buttons.append(skill_btn)
-        self.add_widget(skill_btn)
+        # Skill
+        self.add_action(base_x, base_y - dp(95), r * 0.9, "✦",
+                        (0.6, 0.2, 0.8, 0.85), self.on_skill)
+
+    def add_action(self, cx, cy, radius, label, color, callback):
+        btn = ActionButton(cx, cy, radius, label, color, callback=callback)
+        self.buttons.append(btn)
+        self.add_widget(btn)
+
+    def rebuild_layout(self):
+        """نوێکردنەوەی layout لە کاتی گۆڕینی قەبارە"""
+        if not self._initialized:
+            return
+        self.build_controls()
 
     def create_teams(self):
         """دروستکردنی تیمەکان"""
@@ -604,49 +768,51 @@ class SoccerGame(Widget):
         ]
         return blue, red
 
-    # ========== Action Callbacks ==========
+    # ========== Actions ==========
     def on_shoot(self, action):
-        if action == 'press':
-            self.user.shoot(self.ball, 1.0)
+        if action == 'press' and self.user and self.field:
+            self.user.shoot(self.ball, self.field, 1.0)
 
     def on_pass_low(self, action):
-        if action == 'press':
+        if action == 'press' and self.user:
             target = self.smart.find_best_pass_target(self.user)
             self.user.pass_ball(self.ball, target, high=False)
 
     def on_pass_high(self, action):
-        if action == 'press':
+        if action == 'press' and self.user:
             target = self.smart.find_best_pass_target(self.user)
             self.user.pass_ball(self.ball, target, high=True)
 
     def on_through(self, action):
-        if action == 'press':
+        if action == 'press' and self.user:
             if self.user.collides_ball(self.ball) and self.user.cooldown <= 0:
-                direction = self.user.facing.normalized() if self.user.facing.length() > 0 else Vector(1, 0)
+                direction = self.user.facing if self.user.facing.length() > 0.1 else Vector(1, 0)
                 self.ball.kick(direction, 22)
                 self.user.cooldown = 0.3
 
     def on_dash(self, action):
-        if action == 'press':
+        if action == 'press' and self.user:
             self.user.stamina = max(0, self.user.stamina - 15)
 
     def on_skill(self, action):
-        if action == 'press':
+        if action == 'press' and self.user:
             direction = self.move_joystick.get_movement()
             if direction.length() < 0.1:
-                direction = self.user.facing.normalized()
+                direction = self.user.facing
             skills = ["marseille", "roulette", "elastico", "stepover", "rainbow"]
             chosen = random.choice(skills)
             if self.user.skill_move(self.ball, chosen, direction):
                 self.skill_popup_name = chosen
                 self.skill_popup_timer = 1.2
 
-    # ========== نوێکردنەوە ==========
+    # ========== Update ==========
     def update(self, dt):
-        if self.game_over:
+        if self.game_over or not self._initialized:
             return
 
-        # جوڵەی یاریزان
+        dt = min(dt, 0.05)
+
+        # یاریزان
         move_vec = self.move_joystick.get_movement()
         dash = any(b.pressed for b in self.buttons if b.label == "🏃")
         self.user.move(move_vec, dash=dash, dt=dt)
@@ -654,17 +820,18 @@ class SoccerGame(Widget):
 
         # AI
         for p in self.players:
-            if p == self.user:
+            if p is self.user:
                 continue
             brain = self.ai_brains[p]
             brain.update(dt)
             ai_move = brain.get_move()
 
-            # AI شووت و پاس
+            # AI شووت / پاس
             if p.collides_ball(self.ball) and p.cooldown <= 0:
-                dist_to_goal = abs(p.pos.x - (self.field.left_x if p.team == "right" else self.field.right_x))
+                goal_x = self.field.left_x if p.team == "right" else self.field.right_x
+                dist_to_goal = abs(p.pos.x - goal_x)
                 if dist_to_goal < dp(300):
-                    p.shoot(self.ball, 1.0)
+                    p.shoot(self.ball, self.field, 1.0)
                 else:
                     target = self.smart.find_best_pass_target(p)
                     p.pass_ball(self.ball, target)
@@ -681,6 +848,7 @@ class SoccerGame(Widget):
         # کات
         self.match_time -= dt
         if self.match_time <= 0:
+            self.match_time = 0
             self.game_over = True
 
         # Timers
@@ -694,50 +862,51 @@ class SoccerGame(Widget):
             b.update(dt)
 
     def check_goal(self):
+        """پشکنینی گۆڵ"""
         ball = self.ball
-        # گۆڵی چەپ
-        if ball.pos.x - ball.radius < self.field.left_x:
+        # گۆڵی چەپ (خاڵی ڕاست)
+        if ball.pos.x + ball.radius < self.field.left_x:
             if self.field.goal_y < ball.pos.y < self.field.goal_y + self.field.goal_height:
                 self.score_red += 1
-                self.reset_after_goal("right")
+                self.reset_after_goal()
                 return
-        # گۆڵی ڕاست
-        if ball.pos.x + ball.radius > self.field.right_x:
+        # گۆڵی ڕاست (خاڵی شین)
+        if ball.pos.x - ball.radius > self.field.right_x:
             if self.field.goal_y < ball.pos.y < self.field.goal_y + self.field.goal_height:
                 self.score_blue += 1
-                self.reset_after_goal("left")
+                self.reset_after_goal()
 
-    def reset_after_goal(self, team):
+    def reset_after_goal(self):
+        """ڕیسێت دوای گۆڵ"""
         self.goal_banner = 2.0
-        self.goal_team = team
+        self.goal_team = "left" if self.score_blue > self.score_red else "right"
 
-        self.ball.pos = Vector(self.width / 2, self.height / 2)
-        self.ball.vel = Vector(0, 0)
-        self.ball.trail.clear()
+        # ڕیسێتی تۆپ
+        self.ball.reset(self.width / 2, self.height / 2)
 
+        # ڕیسێتی یاریزانەکان
         w, h = self.width, self.height
         m = self.field.margin
 
-        positions_blue = [
+        blue_pos = [
             (m + dp(100), h / 2), (m + dp(50), h / 2 - dp(80)),
             (m + dp(50), h / 2 + dp(80)), (m + dp(20), h / 2 - dp(140)),
             (m + dp(20), h / 2 + dp(140)),
         ]
-        positions_red = [
+        red_pos = [
             (w - m - dp(100), h / 2), (w - m - dp(50), h / 2 - dp(80)),
             (w - m - dp(50), h / 2 + dp(80)), (w - m - dp(20), h / 2 - dp(140)),
             (w - m - dp(20), h / 2 + dp(140)),
         ]
-        for p, pos in zip([p for p in self.players if p.team == "left"], positions_blue):
-            p.pos = Vector(pos)
-            p.vel = Vector(0, 0)
-        for p, pos in zip([p for p in self.players if p.team == "right"], positions_red):
-            p.pos = Vector(pos)
-            p.vel = Vector(0, 0)
 
-    # ========== وێنەکێشان ==========
+        for p, pos in zip(self.blue_team, blue_pos):
+            p.reset(pos[0], pos[1])
+        for p, pos in zip(self.red_team, red_pos):
+            p.reset(pos[0], pos[1])
+
+    # ========== Draw ==========
     def draw_field(self):
-        # گیا بە چرچر
+        # گیا
         stripe_h = self.height / 10
         for i in range(10):
             if i % 2 == 0:
@@ -759,41 +928,27 @@ class SoccerGame(Widget):
             self.width / 2, self.field.margin + self.field.field_h
         ], width=dp(2))
 
-        # بازنەی ناوەند
-        Line(circle=(
-            self.width / 2, self.height / 2, dp(60)
-        ), width=dp(2))
+        # بازنە ناوەند
+        Line(circle=(self.width / 2, self.height / 2, dp(60)), width=dp(2))
 
         # گۆڵەکان
-        # چەپ
-        Color(*LINE_WHITE)
         Line(rectangle=(
             self.field.left_x - self.field.goal_depth,
-            self.field.goal_y,
-            self.field.goal_depth,
-            self.field.goal_height
+            self.field.goal_y, self.field.goal_depth, self.field.goal_height
         ), width=dp(2))
-
-        # ڕاست
         Line(rectangle=(
-            self.field.right_x,
-            self.field.goal_y,
-            self.field.goal_depth,
-            self.field.goal_height
+            self.field.right_x, self.field.goal_y,
+            self.field.goal_depth, self.field.goal_height
         ), width=dp(2))
 
         # Penalty Areas
         pen_w = dp(100)
         pen_h = self.field.field_h * 0.5
         Line(rectangle=(
-            self.field.left_x,
-            self.height / 2 - pen_h / 2,
-            pen_w, pen_h
+            self.field.left_x, self.height / 2 - pen_h / 2, pen_w, pen_h
         ), width=dp(2))
         Line(rectangle=(
-            self.field.right_x - pen_w,
-            self.height / 2 - pen_h / 2,
-            pen_w, pen_h
+            self.field.right_x - pen_w, self.height / 2 - pen_h / 2, pen_w, pen_h
         ), width=dp(2))
 
     def draw_ball(self):
@@ -824,9 +979,7 @@ class SoccerGame(Widget):
 
         # دەرکار
         Color(*BLACK)
-        Line(circle=(
-            self.ball.pos.x, self.ball.pos.y, self.ball.radius
-        ), width=dp(1.5))
+        Line(circle=(self.ball.pos.x, self.ball.pos.y, self.ball.radius), width=dp(1.5))
 
     def draw_player(self, p):
         # Dash trail
@@ -867,15 +1020,13 @@ class SoccerGame(Widget):
         if p.is_user:
             Color(*YELLOW)
             Line(circle=(p.pos.x, p.pos.y, p.radius + dp(5)), width=dp(2.5))
-
-            # ئەڵقەی سەرەوە
             Line(points=[
                 p.pos.x - dp(8), p.pos.y - p.radius - dp(22),
                 p.pos.x, p.pos.y - p.radius - dp(32),
                 p.pos.x + dp(8), p.pos.y - p.radius - dp(22),
             ], width=dp(2.5))
 
-            # Stamina
+            # Stamina bar
             bar_w = dp(35)
             bar_h = dp(4)
             bar_x = p.pos.x - bar_w / 2
@@ -891,8 +1042,7 @@ class SoccerGame(Widget):
                 Color(*YELLOW)
             else:
                 Color(*RED)
-            Rectangle(pos=(bar_x, bar_y),
-                     size=(bar_w * p.stamina / 100, bar_h))
+            Rectangle(pos=(bar_x, bar_y), size=(bar_w * p.stamina / 100, bar_h))
 
     def draw_ui(self):
         # Scoreboard
@@ -903,10 +1053,7 @@ class SoccerGame(Widget):
             radius=[dp(12)]
         )
 
-        # خاڵ و کات بە Label
-        # (بۆ ئاسانی، لە draw_label بەکار دەهێنین)
-
-        # Goal Banner
+        # Goal banner
         if self.goal_banner > 0:
             alpha = min(1.0, self.goal_banner / 1.5)
             Color(0, 0, 0, 0.6 * alpha)
@@ -915,27 +1062,23 @@ class SoccerGame(Widget):
                 size=(self.width, dp(120))
             )
 
-    def draw(self):
-        # پاککردنەوە
+    def draw(self, dt=None):
+        """وێنەکێشان"""
+        if not self._initialized:
+            return
+
         self.canvas.clear()
 
         with self.canvas:
-            # یاریگا
             self.draw_field()
-
-            # یاریزانەکان
             for p in self.players:
                 self.draw_player(p)
-
-            # تۆپ
             self.draw_ball()
-
-            # UI
             self.draw_ui()
 
+    # ========== Touch ==========
     def on_touch_down(self, touch):
-        # پێش دوگمەکان و joystick
-        if self.move_joystick.on_touch_down(touch):
+        if self.move_joystick and self.move_joystick.on_touch_down(touch):
             return True
         for b in self.buttons:
             if b.on_touch_down(touch):
@@ -943,7 +1086,7 @@ class SoccerGame(Widget):
         return super().on_touch_down(touch)
 
     def on_touch_move(self, touch):
-        if self.move_joystick.on_touch_move(touch):
+        if self.move_joystick and self.move_joystick.on_touch_move(touch):
             return True
         for b in self.buttons:
             if b.on_touch_move(touch):
@@ -951,7 +1094,7 @@ class SoccerGame(Widget):
         return super().on_touch_move(touch)
 
     def on_touch_up(self, touch):
-        if self.move_joystick.on_touch_up(touch):
+        if self.move_joystick and self.move_joystick.on_touch_up(touch):
             return True
         for b in self.buttons:
             if b.on_touch_up(touch):
@@ -963,64 +1106,38 @@ class SoccerGame(Widget):
 # ==================== UI Overlay =========================
 # =========================================================
 class GameUI(FloatLayout):
-    """UI ناوەکی بۆ پیشاندانی خاڵ و کات"""
+    """UI overlay"""
 
     def __init__(self, game, **kwargs):
+        kwargs.setdefault('size_hint', (1, 1))
+        kwargs.setdefault('pos_hint', {'x': 0, 'y': 0})
         super().__init__(**kwargs)
         self.game = game
 
-        # Scoreboard
         self.score_label = Label(
-            text="0 - 0",
-            font_size=dp(28),
-            bold=True,
-            color=WHITE,
+            text="0 - 0", font_size=sp(28), bold=True, color=WHITE,
             pos_hint={'center_x': 0.5, 'top': 0.97},
-            size_hint=(None, None),
-            size=(dp(200), dp(50))
+            size_hint=(None, None), size=(dp(200), dp(50))
         )
         self.add_widget(self.score_label)
 
-        # کات
         self.time_label = Label(
-            text="02:00",
-            font_size=dp(18),
-            bold=True,
-            color=YELLOW,
+            text="02:00", font_size=sp(18), bold=True, color=YELLOW,
             pos_hint={'center_x': 0.5, 'top': 0.91},
-            size_hint=(None, None),
-            size=(dp(100), dp(30))
+            size_hint=(None, None), size=(dp(100), dp(30))
         )
         self.add_widget(self.time_label)
 
-        # تیمی شین
-        self.blue_label = Label(
-            text="🔵 BLUE",
-            font_size=dp(14),
-            bold=True,
-            color=BLUE,
-            pos_hint={'center_x': 0.35, 'top': 0.97},
-            size_hint=(None, None),
-            size=(dp(100), dp(30))
-        )
-        self.add_widget(self.blue_label)
+        # Block touch
+        self.bind(size=self._on_size)
 
-        # تیمی سوور
-        self.red_label = Label(
-            text="RED 🔴",
-            font_size=dp(14),
-            bold=True,
-            color=RED,
-            pos_hint={'center_x': 0.65, 'top': 0.97},
-            size_hint=(None, None),
-            size=(dp(100), dp(30))
-        )
-        self.add_widget(self.red_label)
-
-        Clock.schedule_interval(self.update_ui, 0.1)
+    def _on_size(self, *args):
+        pass
 
     def update_ui(self, dt):
         g = self.game
+        if not g or not g._initialized:
+            return
         self.score_label.text = f"{g.score_blue} - {g.score_red}"
         minutes = int(g.match_time) // 60
         seconds = int(g.match_time) % 60
@@ -1032,30 +1149,41 @@ class GameUI(FloatLayout):
 # =========================================================
 class SoccerApp(App):
     def build(self):
-        # ڕێکخستنی شاشە
         Window.clearcolor = (0.05, 0.05, 0.08, 1)
 
-        root = FloatLayout()
+        self.root_widget = FloatLayout()
 
         # یاری
-        game = SoccerGame(size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
-        root.add_widget(game)
+        self.game = SoccerGame()
+        self.root_widget.add_widget(self.game)
 
         # UI
-        ui = GameUI(game, size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
-        ui.disabled = True  # بۆ ئەوەی touch بە game بگات
-        root.add_widget(ui)
+        self.ui = GameUI(self.game)
+        self.root_widget.add_widget(self.ui)
 
-        # وێنەکێشان لە game
-        Clock.schedule_interval(lambda dt: game.draw(), 1 / 60.0)
+        # یەک Clock بۆ هەموو
+        Clock.schedule_interval(self.tick, 1 / 60.0)
 
-        return root
+        return self.root_widget
+
+    def tick(self, dt):
+        """یەک clock: update + draw"""
+        if self.game:
+            self.game.update(dt)
+            self.game.draw(dt)
+        if self.ui:
+            self.ui.update_ui(dt)
 
     def on_pause(self):
         return True
 
     def on_resume(self):
         pass
+
+    def on_stop(self):
+        # پاککردنەوە
+        Clock.unschedule(self.tick)
+        gc.collect()
 
 
 # =========================================================
